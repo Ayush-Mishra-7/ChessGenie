@@ -5,8 +5,8 @@ import ApiKeyManager from '@/components/ApiKeyManager'
 export default async function DashboardPage() {
   const cookie = headers().get('cookie') || ''
 
-  const base = process.env.NEXT_PUBLIC_BASE_URL || ''
-  const url = `${base}/api/auth/me`
+  const base = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+  const url = `${base.replace(/\/$/, '')}/api/auth/me`
 
   const res = await fetch(url, {
     headers: { cookie },

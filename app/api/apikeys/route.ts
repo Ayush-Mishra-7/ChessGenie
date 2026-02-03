@@ -51,17 +51,32 @@ export async function POST(req: Request) {
     if (!decoded?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { platform, username, apiKey } = await req.json()
-    if (!platform || !username || !apiKey) {
+    if (!platform || !username) {
       return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
     }
 
     const plat = platform as Platform
+
+    // Verify username exists on platform
     const userExists = await validateUsername(plat, username)
     if (!userExists) {
       return NextResponse.json({ error: 'Username not found on platform' }, { status: 400 })
     }
 
-    const encryptedKey = encrypt(apiKey)
+    // If Lichess and apiKey provided, validate token by calling account endpoint
+    let isValid = true
+    if (plat === 'LICHESS' && apiKey) {
+      try {
+        const check = await fetch('https://lichess.org/api/account', {
+          headers: { Authorization: `Bearer ${apiKey}` }
+        })
+        isValid = check.ok
+      } catch (e) {
+        isValid = false
+      }
+    }
+
+    const encryptedKey = apiKey ? encrypt(apiKey) : ''
 
     const saved = await prisma.apiKey.create({
       data: {
@@ -69,11 +84,11 @@ export async function POST(req: Request) {
         platform: plat as any,
         username,
         apiKey: encryptedKey,
-        isValid: true
+        isValid
       }
     })
 
-    return NextResponse.json({ ok: true, id: saved.id })
+    return NextResponse.json({ ok: true, id: saved.id, isValid })
   } catch (err) {
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
