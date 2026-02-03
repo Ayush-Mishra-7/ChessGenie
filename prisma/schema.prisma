@@ -1,0 +1,86 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String         @id @default(cuid())
+  email           String         @unique
+  hashedPassword  String?
+  name            String?
+  emailVerified   DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  apiKeys         ApiKey[]
+  analyses        GameAnalysis[]
+  subscription    Subscription?
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  userId      String
+  platform    Platform  @default(LICHESS)
+  username    String
+  apiKey      String
+  isValid     Boolean   @default(true)
+  lastChecked DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform])
+}
+
+enum Platform {
+  LICHESS
+  CHESS_COM
+}
+
+model Subscription {
+  id                    String              @id @default(cuid())
+  userId                String              @unique
+  tier                  SubscriptionTier
+  status                SubscriptionStatus
+  stripeCustomerId      String?
+  stripeSubscriptionId  String?
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  cancelAtPeriodEnd     Boolean             @default(false)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum SubscriptionTier {
+  FREE
+  BASIC
+  PRO
+  ULTIMATE
+  PREMIUM_MONTHLY
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  EXPIRED
+  PAST_DUE
+}
+
+model GameAnalysis {
+  id        String   @id @default(cuid())
+  userId    String
+  jobId     String?
+  gameId    String?
+  pgn       String?
+  result    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
