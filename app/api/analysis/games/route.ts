@@ -13,20 +13,39 @@ export async function GET(req: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
+        // Fetch games with their job info
         const games = await prisma.gameAnalysis.findMany({
             where: { userId: decoded.id },
             orderBy: { createdAt: 'desc' },
-            take: 50
+            take: 100
         })
+
+        // Fetch jobs for grouping
+        const jobs = await prisma.job.findMany({
+            where: { userId: decoded.id },
+            orderBy: { createdAt: 'desc' },
+            take: 20
+        })
+
+        // Create job summaries for grouping
+        const jobSummaries = jobs.map(job => ({
+            id: job.id,
+            status: job.status,
+            createdAt: job.createdAt.toISOString(),
+            payload: job.payload as any,
+            gameCount: games.filter(g => g.jobId === job.id).length
+        }))
 
         return NextResponse.json({
             games: games.map(game => ({
                 id: game.id,
                 gameId: game.gameId,
+                jobId: game.jobId,  // Include jobId for grouping
                 pgn: game.pgn,
                 result: game.result,
                 createdAt: game.createdAt.toISOString()
-            }))
+            })),
+            jobs: jobSummaries  // Include job summaries
         })
     } catch (err) {
         console.error('Games list error:', err)

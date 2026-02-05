@@ -142,63 +142,78 @@ async def _process_job_task(job_id: str, user_id: str, payload):
         logger.info(f"Fetched {len(games)} games. Starting Stockfish analysis...")
         
         # Import analyzer (do it here to avoid import issues if Stockfish not installed)
-        from analyzer import analyze_game, find_stockfish
+        from analyzer import analyze_games_parallel, find_stockfish
         
         stockfish_available = find_stockfish() is not None
         if not stockfish_available:
             logger.warning("Stockfish not found - skipping deep analysis")
         
-        # Analyze and store games
-        analyses = []
+        # Check for previously analyzed games (caching)
+        game_ids = [game.game_id for game in games]
+        cached_analyses = {}
         with engine.connect() as conn:
-            for i, game in enumerate(games):
-                ga_id = f"{job_id}_g{i}"
-                
-                # Run Stockfish analysis if available
-                analysis_result = None
-                if stockfish_available and game.pgn:
-                    try:
-                        logger.info(f"Analyzing game {i+1}/{len(games)}: {game.white} vs {game.black}")
-                        analysis_result = await analyze_game(game.pgn, game.game_id, analysis_depth)
-                    except Exception as e:
-                        logger.error(f"Analysis failed for game {i}: {e}")
-                
-                # Build result JSON
-                if analysis_result:
-                    result_data = {
-                        "game_id": game.game_id,
-                        "white": game.white,
-                        "black": game.black,
-                        "result": game.result,
-                        "opening": game.opening or analysis_result.opening,
-                        "date": str(game.date) if game.date else None,
-                        "time_control": game.time_control,
-                        "platform": game.platform,
-                        "status": "analyzed",
-                        # Analysis metrics
-                        "accuracy_white": analysis_result.accuracy_white,
-                        "accuracy_black": analysis_result.accuracy_black,
-                        "total_moves": analysis_result.total_moves,
-                        "mistakes": analysis_result.mistakes,
-                        "blunders": analysis_result.blunders,
-                        "best_moves": analysis_result.best_moves,
-                        "critical_moments": analysis_result.critical_moments
-                    }
-                else:
-                    result_data = {
-                        "game_id": game.game_id,
-                        "white": game.white,
-                        "black": game.black,
-                        "result": game.result,
-                        "opening": game.opening,
-                        "date": str(game.date) if game.date else None,
-                        "time_control": game.time_control,
-                        "platform": game.platform,
-                        "status": "fetched"  # Not analyzed
-                    }
-                
-                result_json = json.dumps(result_data)
-                
+            result = conn.execute(
+                text('''
+                    SELECT "gameId", result FROM "GameAnalysis" 
+                    WHERE "userId" = :userId AND "gameId" = ANY(:gameIds)
+                    AND result::text LIKE '%"status": "analyzed"%'
+                '''),
+                {'userId': user_id, 'gameIds': game_ids}
+            )
+            for row in result:
+                cached_analyses[row[0]] = row[1]
+        
+        # Separate games into cached and need-analysis
+        games_to_analyze = []
+        game_lookup = {}
+        for game in games:
+            game_lookup[game.game_id] = game
+            if game.game_id not in cached_analyses and game.pgn:
+                games_to_analyze.append((game.game_id, game.pgn))
+        
+        logger.info(f"Found {len(cached_analyses)} cached analyses, {len(games_to_analyze)} need analysis")
+        
+        analyses = []
+        game_counter = [0]  # Use list to allow mutation in closure
+        
+        def store_game_result(game, analysis_result, ga_id):
+            """Store a single game result to database immediately."""
+            if analysis_result:
+                result_data = {
+                    "game_id": game.game_id,
+                    "white": game.white,
+                    "black": game.black,
+                    "result": game.result,
+                    "opening": game.opening or analysis_result.opening,
+                    "date": str(game.date) if game.date else None,
+                    "time_control": game.time_control,
+                    "platform": game.platform,
+                    "status": "analyzed",
+                    # Analysis metrics
+                    "accuracy_white": analysis_result.accuracy_white,
+                    "accuracy_black": analysis_result.accuracy_black,
+                    "total_moves": analysis_result.total_moves,
+                    "mistakes": analysis_result.mistakes,
+                    "blunders": analysis_result.blunders,
+                    "best_moves": analysis_result.best_moves,
+                    "critical_moments": analysis_result.critical_moments
+                }
+            else:
+                result_data = {
+                    "game_id": game.game_id,
+                    "white": game.white,
+                    "black": game.black,
+                    "result": game.result,
+                    "opening": game.opening,
+                    "date": str(game.date) if game.date else None,
+                    "time_control": game.time_control,
+                    "platform": game.platform,
+                    "status": "fetched"  # Not analyzed
+                }
+            
+            result_json = json.dumps(result_data)
+            
+            with engine.connect() as conn:
                 conn.execute(
                     text('''
                         INSERT INTO "GameAnalysis" 
@@ -214,16 +229,40 @@ async def _process_job_task(job_id: str, user_id: str, payload):
                         'result': result_json
                     }
                 )
-                
-                analyses.append({
-                    'id': ga_id, 
-                    'gameId': game.game_id,
-                    'status': result_data.get('status'),
-                    'accuracy_white': result_data.get('accuracy_white'),
-                    'accuracy_black': result_data.get('accuracy_black')
-                })
+                conn.commit()
             
-            # Mark job as completed
+            return {
+                'id': ga_id, 
+                'gameId': game.game_id,
+                'status': result_data.get('status'),
+                'accuracy_white': result_data.get('accuracy_white'),
+                'accuracy_black': result_data.get('accuracy_black')
+            }
+        
+        if stockfish_available and games_to_analyze:
+            # Use parallel analysis - stream results as each game completes
+            async for analysis_result in analyze_games_parallel(
+                games_to_analyze, 
+                depth=analysis_depth,
+                max_workers=2  # Limit concurrent Stockfish instances
+            ):
+                game_counter[0] += 1
+                ga_id = f"{job_id}_g{game_counter[0]}"
+                game = game_lookup.get(analysis_result.game_id)
+                
+                if game:
+                    analysis_info = store_game_result(game, analysis_result, ga_id)
+                    analyses.append(analysis_info)
+                    logger.info(f"Stored game {game_counter[0]}/{len(games)}: {game.white} vs {game.black}")
+        else:
+            # No Stockfish - just store games without analysis
+            for i, game in enumerate(games):
+                ga_id = f"{job_id}_g{i}"
+                analysis_info = store_game_result(game, None, ga_id)
+                analyses.append(analysis_info)
+        
+        # Mark job as completed
+        with engine.connect() as conn:
             conn.execute(
                 text('UPDATE "Job" SET status = :s, result = :res, "updatedAt" = now() WHERE id = :id'),
                 {
@@ -239,7 +278,7 @@ async def _process_job_task(job_id: str, user_id: str, payload):
             )
             conn.commit()
         
-        logger.info(f"Job {job_id} completed: fetched {len(games)} games")
+        logger.info(f"Job {job_id} completed: analyzed {len(analyses)} games")
         
     except Exception as e:
         logger.error(f"Job {job_id} failed: {e}")

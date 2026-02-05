@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useToast } from './Toast'
 
 type Job = {
     id: string
@@ -25,6 +26,8 @@ export default function AnalysisStarter() {
     const [error, setError] = useState<string | null>(null)
     const [currentJob, setCurrentJob] = useState<Job | null>(null)
     const [recentJobs, setRecentJobs] = useState<Job[]>([])
+    const { showToast } = useToast()
+    const previousStatus = useRef<string | null>(null)
 
     // Load API keys on mount
     useEffect(() => {
@@ -43,17 +46,28 @@ export default function AnalysisStarter() {
                 const res = await fetch(`/api/analysis/status/${currentJob.id}`)
                 if (res.ok) {
                     const data = await res.json()
+                    const newStatus = data.status
+
                     setCurrentJob({
                         id: data.jobId,
-                        status: data.status,
+                        status: newStatus,
                         gameCount: data.gameCount,
                         result: data.result,
                         createdAt: data.createdAt
                     })
 
-                    if (data.status === 'COMPLETED' || data.status === 'FAILED') {
+                    // Show toast notification on status change
+                    if (previousStatus.current === 'RUNNING' && newStatus === 'COMPLETED') {
+                        const gameCount = data.result?.total_games || data.gameCount || 0
+                        showToast(`Analysis complete! ${gameCount} games analyzed.`, 'success')
+                        loadRecentJobs()
+                    } else if (previousStatus.current === 'RUNNING' && newStatus === 'FAILED') {
+                        const errorMsg = data.result?.error || 'Unknown error'
+                        showToast(`Analysis failed: ${errorMsg}`, 'error')
                         loadRecentJobs()
                     }
+
+                    previousStatus.current = newStatus
                 }
             } catch (e) {
                 console.error('Failed to poll job status', e)
@@ -61,7 +75,7 @@ export default function AnalysisStarter() {
         }, 2000) // Poll every 2 seconds
 
         return () => clearInterval(interval)
-    }, [currentJob])
+    }, [currentJob, showToast])
 
     async function loadApiKeys() {
         try {
