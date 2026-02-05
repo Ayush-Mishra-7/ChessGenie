@@ -2,4 +2,8 @@ fastapi
 uvicorn[standard]
 python-chess
 requests
+httpx
 pydantic
+python-dotenv
+psycopg2-binary
+sqlalchemy

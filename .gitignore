@@ -35,3 +35,6 @@ yarn-error.log*
 coverage/
 /.idea/
 
+## Chess engines
+backend/engines/
+
