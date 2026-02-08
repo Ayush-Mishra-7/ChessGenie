@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 
 // Dynamic import to avoid SSR issues with react-chessboard
 const PositionViewer = dynamic(() => import('./PositionViewer'), { ssr: false })
+const GameViewer = dynamic(() => import('./GameViewer'), { ssr: false })
 
 type GameResult = {
     game_id: string
@@ -43,6 +44,7 @@ type AnalysisGame = {
     id: string
     gameId: string
     jobId?: string
+    pgn: string
     result: GameResult
     createdAt: string
 }
@@ -66,6 +68,9 @@ export default function AnalysisResults() {
     const [newGamesCount, setNewGamesCount] = useState(0)
     const [usernames, setUsernames] = useState<string[]>([]) // User's profile names
     const [selectedPosition, setSelectedPosition] = useState<{ fen: string, played: string, best: string } | null>(null)
+    const [reviewGame, setReviewGame] = useState<AnalysisGame | null>(null)
+    const [jobToDelete, setJobToDelete] = useState<JobSummary | null>(null)
+
 
     // Fetch user's profile names from API keys
     useEffect(() => {
@@ -110,6 +115,42 @@ export default function AnalysisResults() {
             if (!silent) setLoading(false)
         }
     }, [lastGameCount])
+    const deleteJob = async (jobId: string) => {
+        try {
+            const res = await fetch(`/api/analysis/jobs/${jobId}`, {
+                method: 'DELETE'
+            })
+
+            if (res.ok) {
+                // Remove job and its games from local state
+                setJobs(prev => prev.filter(j => j.id !== jobId))
+                setGames(prev => prev.filter(g => g.jobId !== jobId))
+            } else {
+                alert('Failed to delete analysis')
+            }
+        } catch (e) {
+            console.error('Delete failed', e)
+            alert('Error deleting analysis')
+        }
+    }
+
+    const deleteGame = async (id: string) => {
+        try {
+            const res = await fetch(`/api/analysis/games/${id}`, {
+                method: 'DELETE'
+            })
+
+            if (res.ok) {
+                // Remove from local state
+                setGames(prev => prev.filter(g => g.id !== id))
+            } else {
+                alert('Failed to delete analysis')
+            }
+        } catch (e) {
+            console.error('Delete failed', e)
+            alert('Error deleting analysis')
+        }
+    }
 
     // Initial load
     useEffect(() => {
@@ -286,9 +327,22 @@ export default function AnalysisResults() {
                                             </div>
                                         </div>
                                     </div>
-                                    <span className={`text-gray-400 transition-transform ${isJobExpanded ? 'rotate-180' : ''}`}>
-                                        ▼
-                                    </span>
+
+                                    <div className="flex items-center gap-3">
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                setJobToDelete(job)
+                                            }}
+                                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                            title="Delete Analysis Session"
+                                        >
+                                            🗑️
+                                        </button>
+                                        <span className={`text-gray-400 transition-transform ${isJobExpanded ? 'rotate-180' : ''}`}>
+                                            ▼
+                                        </span>
+                                    </div>
                                 </div>
 
                                 {/* Expanded Job - Show Games */}
@@ -353,23 +407,32 @@ export default function AnalysisResults() {
                                                         {/* Expanded Details */}
                                                         {isExpanded && isAnalyzed && (
                                                             <div className="border-t p-3 bg-gray-50">
-                                                                <div className="grid grid-cols-2 gap-4 mb-3">
-                                                                    <div className="text-center p-2 bg-white rounded">
-                                                                        <div className={`text-2xl font-bold ${getAccuracyColor(r.accuracy_white)}`}>
-                                                                            {r.accuracy_white?.toFixed(1)}%
+                                                                <div className="flex justify-between items-start mb-3">
+                                                                    <div className="grid grid-cols-2 gap-4">
+                                                                        <div className="text-center p-2 bg-white rounded border">
+                                                                            <div className={`text-2xl font-bold ${getAccuracyColor(r.accuracy_white)}`}>
+                                                                                {r.accuracy_white?.toFixed(1)}%
+                                                                            </div>
+                                                                            <div className="text-xs text-gray-500">
+                                                                                {r.white} - {getAccuracyLabel(r.accuracy_white)}
+                                                                            </div>
                                                                         </div>
-                                                                        <div className="text-xs text-gray-500">
-                                                                            {r.white} - {getAccuracyLabel(r.accuracy_white)}
+                                                                        <div className="text-center p-2 bg-white rounded border">
+                                                                            <div className={`text-2xl font-bold ${getAccuracyColor(r.accuracy_black)}`}>
+                                                                                {r.accuracy_black?.toFixed(1)}%
+                                                                            </div>
+                                                                            <div className="text-xs text-gray-500">
+                                                                                {r.black} - {getAccuracyLabel(r.accuracy_black)}
+                                                                            </div>
                                                                         </div>
                                                                     </div>
-                                                                    <div className="text-center p-2 bg-white rounded">
-                                                                        <div className={`text-2xl font-bold ${getAccuracyColor(r.accuracy_black)}`}>
-                                                                            {r.accuracy_black?.toFixed(1)}%
-                                                                        </div>
-                                                                        <div className="text-xs text-gray-500">
-                                                                            {r.black} - {getAccuracyLabel(r.accuracy_black)}
-                                                                        </div>
-                                                                    </div>
+
+                                                                    <button
+                                                                        onClick={() => setReviewGame(game)}
+                                                                        className="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 font-medium text-sm flex items-center gap-2"
+                                                                    >
+                                                                        <span>♟️</span> Review Game
+                                                                    </button>
                                                                 </div>
 
                                                                 {/* Blunders */}
@@ -441,6 +504,50 @@ export default function AnalysisResults() {
                     bestMove={selectedPosition.best}
                     onClose={() => setSelectedPosition(null)}
                 />
+            )}
+
+            {/* Game Viewer Modal */}
+            {reviewGame && (
+                <GameViewer
+                    pgn={reviewGame.pgn}
+                    onClose={() => setReviewGame(null)}
+                />
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {jobToDelete && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6 transform transition-all">
+                        <div className="text-center">
+                            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 mb-4">
+                                <span className="text-2xl">🗑️</span>
+                            </div>
+                            <h3 className="text-lg font-medium text-gray-900 mb-2">Delete Analysis Session?</h3>
+                            <p className="text-sm text-gray-500 mb-6">
+                                Are you sure you want to delete this session? This will remove
+                                <span className="font-bold text-gray-700"> {jobToDelete.gameCount} games </span>
+                                and cannot be undone.
+                            </p>
+                            <div className="flex justify-center gap-3">
+                                <button
+                                    onClick={() => setJobToDelete(null)}
+                                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-lg font-medium transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        deleteJob(jobToDelete.id)
+                                        setJobToDelete(null)
+                                    }}
+                                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium shadow-sm transition-colors"
+                                >
+                                    Yes, Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     )

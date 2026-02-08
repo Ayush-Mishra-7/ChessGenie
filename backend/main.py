@@ -164,17 +164,58 @@ async def _process_job_task(job_id: str, user_id: str, payload):
                 cached_analyses[row[0]] = row[1]
         
         # Separate games into cached and need-analysis
+        analyses = []
+        game_counter = [0]
         games_to_analyze = []
         game_lookup = {}
+        
         for game in games:
             game_lookup[game.game_id] = game
-            if game.game_id not in cached_analyses and game.pgn:
+            
+            # Check for cached analysis
+            if game.game_id in cached_analyses:
+                # Reuse existing analysis for this new job record
+                game_counter[0] += 1
+                ga_id = f"{job_id}_g{game_counter[0]}"
+                cached_result = cached_analyses[game.game_id]
+                
+                # Create a new record in DB with copied result
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(
+                            text('''
+                                INSERT INTO "GameAnalysis" 
+                                (id, "userId", "jobId", "gameId", pgn, result, "createdAt", "updatedAt") 
+                                VALUES (:id, :userId, :jobId, :gameId, :pgn, :result, now(), now())
+                            '''),
+                            {
+                                'id': ga_id,
+                                'userId': user_id,
+                                'jobId': job_id,
+                                'gameId': game.game_id,
+                                'pgn': game.pgn,
+                                'result': json.dumps(cached_result) if isinstance(cached_result, dict) else cached_result
+                            }
+                        )
+                        conn.commit()
+                    
+                    # Add to analyses list for the job result
+                    analyses.append({
+                        'id': ga_id, 
+                        'gameId': game.game_id,
+                        'status': 'analyzed' # It was cached
+                    })
+                    logger.info(f"Using cached analysis for game {game_counter[0]}/{len(games)}")
+                except Exception as e:
+                    logger.error(f"Failed to use cached analysis: {e}")
+                    # If cache copy fails, fallback to re-analyzing
+                    if game.pgn:
+                        games_to_analyze.append((game.game_id, game.pgn))
+
+            elif game.pgn:
                 games_to_analyze.append((game.game_id, game.pgn))
         
-        logger.info(f"Found {len(cached_analyses)} cached analyses, {len(games_to_analyze)} need analysis")
-        
-        analyses = []
-        game_counter = [0]  # Use list to allow mutation in closure
+        logger.info(f"Using {len(analyses)} cached analyses, {len(games_to_analyze)} need analysis")
         
         def store_game_result(game, analysis_result, ga_id):
             """Store a single game result to database immediately."""
