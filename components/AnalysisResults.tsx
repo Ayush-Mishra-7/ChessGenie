@@ -67,7 +67,14 @@ export default function AnalysisResults() {
     const [lastGameCount, setLastGameCount] = useState(0)
     const [newGamesCount, setNewGamesCount] = useState(0)
     const [usernames, setUsernames] = useState<string[]>([]) // User's profile names
-    const [selectedPosition, setSelectedPosition] = useState<{ fen: string, played: string, best: string } | null>(null)
+    const [selectedPosition, setSelectedPosition] = useState<{
+        fen: string,
+        played: string,
+        best: string,
+        orientation: 'white' | 'black',
+        whitePlayer?: string,
+        blackPlayer?: string
+    } | null>(null)
     const [reviewGame, setReviewGame] = useState<AnalysisGame | null>(null)
     const [jobToDelete, setJobToDelete] = useState<JobSummary | null>(null)
 
@@ -446,7 +453,19 @@ export default function AnalysisResults() {
                                                                                 <div
                                                                                     key={i}
                                                                                     className={`bg-red-50 p-2 rounded ${b.fen ? 'cursor-pointer hover:bg-red-100 transition-colors' : ''}`}
-                                                                                    onClick={() => b.fen && setSelectedPosition({ fen: b.fen, played: b.played, best: b.best })}
+                                                                                    onClick={() => {
+                                                                                        if (b.fen) {
+                                                                                            const isUserBlack = usernames.some(u => r.black.toLowerCase().includes(u))
+                                                                                            setSelectedPosition({
+                                                                                                fen: b.fen,
+                                                                                                played: b.played,
+                                                                                                best: b.best,
+                                                                                                orientation: isUserBlack ? 'black' : 'white',
+                                                                                                whitePlayer: r.white,
+                                                                                                blackPlayer: r.black
+                                                                                            })
+                                                                                        }
+                                                                                    }}
                                                                                 >
                                                                                     <span className="font-medium">Move {b.move_number}:</span> {b.player} played <span className="font-mono bg-red-100 px-1 rounded">{b.played}</span>
                                                                                     {' '}→ best: <span className="font-mono bg-green-100 px-1 rounded">{b.best}</span>
@@ -468,7 +487,19 @@ export default function AnalysisResults() {
                                                                                 <div
                                                                                     key={i}
                                                                                     className={`bg-yellow-50 p-2 rounded ${m.fen ? 'cursor-pointer hover:bg-yellow-100 transition-colors' : ''}`}
-                                                                                    onClick={() => m.fen && setSelectedPosition({ fen: m.fen, played: m.played, best: m.best })}
+                                                                                    onClick={() => {
+                                                                                        if (m.fen) {
+                                                                                            const isUserBlack = usernames.some(u => r.black.toLowerCase().includes(u))
+                                                                                            setSelectedPosition({
+                                                                                                fen: m.fen,
+                                                                                                played: m.played,
+                                                                                                best: m.best,
+                                                                                                orientation: isUserBlack ? 'black' : 'white',
+                                                                                                whitePlayer: r.white,
+                                                                                                blackPlayer: r.black
+                                                                                            })
+                                                                                        }
+                                                                                    }}
                                                                                 >
                                                                                     <span className="font-medium">Move {m.move_number}:</span> {m.player} played <span className="font-mono bg-yellow-100 px-1 rounded">{m.played}</span>
                                                                                     {' '}→ best: <span className="font-mono bg-green-100 px-1 rounded">{m.best}</span>
@@ -503,6 +534,9 @@ export default function AnalysisResults() {
                     playedMove={selectedPosition.played}
                     bestMove={selectedPosition.best}
                     onClose={() => setSelectedPosition(null)}
+                    orientation={selectedPosition.orientation}
+                    whitePlayer={selectedPosition.whitePlayer}
+                    blackPlayer={selectedPosition.blackPlayer}
                 />
             )}
 
@@ -511,6 +545,11 @@ export default function AnalysisResults() {
                 <GameViewer
                     pgn={reviewGame.pgn}
                     onClose={() => setReviewGame(null)}
+                    orientation={(() => {
+                        const r = reviewGame.result
+                        const isUserBlack = usernames.some(u => r.black.toLowerCase().includes(u))
+                        return isUserBlack ? 'black' : 'white'
+                    })()}
                 />
             )}
 
