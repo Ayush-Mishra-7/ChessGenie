@@ -10,9 +10,20 @@ type PositionViewerProps = {
     playedMove: string
     bestMove: string
     onClose: () => void
+    orientation?: 'white' | 'black'
+    whitePlayer?: string
+    blackPlayer?: string
 }
 
-export default function PositionViewer({ fen, playedMove, bestMove, onClose }: PositionViewerProps) {
+export default function PositionViewer({
+    fen,
+    playedMove,
+    bestMove,
+    onClose,
+    orientation = 'white',
+    whitePlayer = 'White',
+    blackPlayer = 'Black'
+}: PositionViewerProps) {
     const { analysis, isAnalyzing, startAnalysis, stopAnalysis } = useStockfish()
 
     useEffect(() => {
@@ -20,6 +31,9 @@ export default function PositionViewer({ fen, playedMove, bestMove, onClose }: P
         startAnalysis(fen)
         return () => stopAnalysis()
     }, [fen, startAnalysis, stopAnalysis])
+
+    const topPlayer = orientation === 'white' ? blackPlayer : whitePlayer
+    const bottomPlayer = orientation === 'white' ? whitePlayer : blackPlayer
 
     return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
@@ -39,23 +53,40 @@ export default function PositionViewer({ fen, playedMove, bestMove, onClose }: P
                 </div>
 
                 {/* Board */}
-                <div className="p-4 flex justify-center bg-gray-100">
-                    <div className="w-[320px] h-[320px]">
+                <div className="p-4 flex flex-col items-center justify-center bg-gray-100 gap-2">
+                    {/* Top Player */}
+                    <div className="w-[320px] flex items-center gap-2 text-gray-700 font-semibold text-sm">
+                        <div className="w-6 h-6 bg-gray-300 rounded-full flex items-center justify-center text-gray-600">
+                            👤
+                        </div>
+                        {topPlayer}
+                    </div>
+
+                    <div className="w-[320px] h-[320px] rounded shadow overflow-hidden">
                         <Chessboard
                             key={fen}
                             options={{
                                 id: "position-viewer-board",
                                 position: fen,
                                 animationDurationInMs: 0,
-                                allowDragging: false
+                                allowDragging: false,
+                                boardOrientation: orientation
                             }}
                         />
+                    </div>
+
+                    {/* Bottom Player */}
+                    <div className="w-[320px] flex items-center gap-2 text-gray-700 font-semibold text-sm">
+                        <div className="w-6 h-6 bg-gray-300 rounded-full flex items-center justify-center text-gray-600">
+                            👤
+                        </div>
+                        {bottomPlayer}
                     </div>
                 </div>
 
                 {/* Live Analysis */}
                 <div className="px-4 pb-2">
-                    <LiveAnalysis analysis={analysis} isAnalyzing={isAnalyzing} />
+                    <LiveAnalysis analysis={analysis} isAnalyzing={isAnalyzing} orientation={orientation} />
                 </div>
 
                 {/* Move Comparison */}

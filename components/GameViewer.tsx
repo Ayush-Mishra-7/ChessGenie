@@ -10,12 +10,15 @@ type GameViewerProps = {
     pgn: string
     initialMoveNumber?: number // 1-based
     onClose: () => void
+    orientation?: 'white' | 'black'
 }
 
-export default function GameViewer({ pgn, initialMoveNumber = 0, onClose }: GameViewerProps) {
+export default function GameViewer({ pgn, initialMoveNumber = 0, onClose, orientation = 'white' }: GameViewerProps) {
     const [game, setGame] = useState(new Chess())
     const [currentMoveIndex, setCurrentMoveIndex] = useState(-1) // -1 = start position
     const [history, setHistory] = useState<{ san: string, fen: string }[]>([])
+    const [whitePlayer, setWhitePlayer] = useState('White')
+    const [blackPlayer, setBlackPlayer] = useState('Black')
     const { analysis, isAnalyzing, startAnalysis, stopAnalysis } = useStockfish()
 
     // Initialize game
@@ -33,6 +36,11 @@ export default function GameViewer({ pgn, initialMoveNumber = 0, onClose }: Game
 
             setHistory(historyData)
             setGame(newGame)
+
+            // Extract player names
+            const headers = newGame.header()
+            if (headers['White']) setWhitePlayer(headers['White'])
+            if (headers['Black']) setBlackPlayer(headers['Black'])
 
             // Jump to initial move if provided
             if (initialMoveNumber > 0) {
@@ -92,6 +100,9 @@ export default function GameViewer({ pgn, initialMoveNumber = 0, onClose }: Game
         }
     }
 
+    const topPlayer = orientation === 'white' ? blackPlayer : whitePlayer
+    const bottomPlayer = orientation === 'white' ? whitePlayer : blackPlayer
+
     return (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={onClose}>
             <div
@@ -99,16 +110,33 @@ export default function GameViewer({ pgn, initialMoveNumber = 0, onClose }: Game
                 onClick={e => e.stopPropagation()}
             >
                 {/* Left: Board */}
-                <div className="flex-1 bg-gray-100 flex items-center justify-center p-4">
+                <div className="flex-1 bg-gray-100 flex flex-col items-center justify-center p-4 gap-2">
+                    {/* Top Player */}
+                    <div className="w-full max-w-[60vh] flex items-center gap-2 text-gray-700 font-semibold">
+                        <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center text-gray-600">
+                            👤
+                        </div>
+                        {topPlayer}
+                    </div>
+
                     <div className="w-full max-w-[60vh] aspect-square rounded shadow-lg overflow-hidden">
                         <Chessboard
                             options={{
                                 id: "GameViewerBoard",
                                 position: currentFen,
                                 animationDurationInMs: 200,
-                                allowDragging: false
+                                allowDragging: false,
+                                boardOrientation: orientation
                             }}
                         />
+                    </div>
+
+                    {/* Bottom Player */}
+                    <div className="w-full max-w-[60vh] flex items-center gap-2 text-gray-700 font-semibold">
+                        <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center text-gray-600">
+                            👤
+                        </div>
+                        {bottomPlayer}
                     </div>
                 </div>
 
@@ -122,7 +150,7 @@ export default function GameViewer({ pgn, initialMoveNumber = 0, onClose }: Game
 
                     {/* Live Analysis */}
                     <div className="p-4 border-b">
-                        <LiveAnalysis analysis={analysis} isAnalyzing={isAnalyzing} />
+                        <LiveAnalysis analysis={analysis} isAnalyzing={isAnalyzing} orientation={orientation} />
                     </div>
 
                     {/* Move History */}

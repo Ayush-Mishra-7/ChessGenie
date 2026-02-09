@@ -20,6 +20,7 @@ export function useStockfish(): StockfishHook {
     const [analysis, setAnalysis] = useState<AnalysisResult | null>(null)
     const [isAnalyzing, setIsAnalyzing] = useState(false)
     const workerRef = useRef<Worker | null>(null)
+    const turnRef = useRef<'w' | 'b'>('w') // Keep track of whose turn it is
 
     useEffect(() => {
         // Initialize worker
@@ -66,9 +67,20 @@ export function useStockfish(): StockfishHook {
 
                 if (scoreMateMatch) {
                     mate = parseInt(scoreMateMatch[1])
+                    // Stockfish gives mate relative to side to move
+                    // We want absolute (White positive, Black negative)
+                    if (turnRef.current === 'b') {
+                        mate = -mate
+                    }
                     score = mate > 0 ? 10000 : -10000 // High score for mate
                 } else if (scoreCpMatch) {
-                    score = parseInt(scoreCpMatch[1])
+                    let cp = parseInt(scoreCpMatch[1])
+                    // Stockfish gives cp relative to side to move
+                    // We want absolute (White positive, Black negative)
+                    if (turnRef.current === 'b') {
+                        cp = -cp
+                    }
+                    score = cp
                 }
 
                 setAnalysis(prev => ({
@@ -89,7 +101,13 @@ export function useStockfish(): StockfishHook {
     const startAnalysis = useCallback((fen: string, depth: number = 20) => {
         if (!workerRef.current) return
 
-        console.log('Starting analysis for FEN:', fen)
+        // Update turn from FEN
+        const parts = fen.split(' ')
+        if (parts.length >= 2) {
+            turnRef.current = parts[1] as 'w' | 'b'
+        }
+
+        console.log('Starting analysis for FEN:', fen, 'Turn:', turnRef.current)
 
         setIsAnalyzing(true)
         setAnalysis(null) // Clear previous analysis
