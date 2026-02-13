@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic'
 // Dynamic import to avoid SSR issues with react-chessboard
 const PositionViewer = dynamic(() => import('./PositionViewer'), { ssr: false })
 const GameViewer = dynamic(() => import('./GameViewer'), { ssr: false })
+const PracticeModal = dynamic(() => import('./PracticeModal'), { ssr: false })
 
 type GameResult = {
     game_id: string
@@ -71,12 +72,24 @@ export default function AnalysisResults() {
         fen: string,
         played: string,
         best: string,
+        playedUci?: string,
+        bestUci?: string,
         orientation: 'white' | 'black',
         whitePlayer?: string,
         blackPlayer?: string
     } | null>(null)
     const [reviewGame, setReviewGame] = useState<AnalysisGame | null>(null)
     const [jobToDelete, setJobToDelete] = useState<JobSummary | null>(null)
+    const [practicePosition, setPracticePosition] = useState<{
+        fen: string
+        played: string
+        best: string
+        playedUci: string
+        bestUci: string
+        orientation: 'white' | 'black'
+        whitePlayer?: string
+        blackPlayer?: string
+    } | null>(null)
 
 
     // Fetch user's profile names from API keys
@@ -198,7 +211,7 @@ export default function AnalysisResults() {
     }, [isPolling, loadGames])
 
     const getAccuracyColor = (accuracy?: number) => {
-        if (!accuracy) return 'text-gray-500'
+        if (accuracy == null) return 'text-gray-500'
         if (accuracy >= 90) return 'text-green-600'
         if (accuracy >= 75) return 'text-blue-600'
         if (accuracy >= 60) return 'text-yellow-600'
@@ -206,7 +219,7 @@ export default function AnalysisResults() {
     }
 
     const getAccuracyLabel = (accuracy?: number) => {
-        if (!accuracy) return 'N/A'
+        if (accuracy == null) return 'N/A'
         if (accuracy >= 95) return 'Brilliant!'
         if (accuracy >= 90) return 'Excellent'
         if (accuracy >= 80) return 'Good'
@@ -442,73 +455,129 @@ export default function AnalysisResults() {
                                                                     </button>
                                                                 </div>
 
-                                                                {/* Blunders */}
-                                                                {r.blunders && r.blunders.length > 0 && (
-                                                                    <div className="mb-2">
-                                                                        <div className="text-sm font-medium text-red-600 mb-1">
-                                                                            💥 Blunders ({r.blunders.length})
+                                                                {/* Blunders - filtered to user's perspective only */}
+                                                                {(() => {
+                                                                    const isUserBlack = usernames.some(u => r.black.toLowerCase().includes(u))
+                                                                    const userSide = isUserBlack ? 'black' : 'white'
+                                                                    const userBlunders = (r.blunders || []).filter(b => b.player === userSide)
+                                                                    return userBlunders.length > 0 ? (
+                                                                        <div className="mb-2">
+                                                                            <div className="text-sm font-medium text-red-600 mb-1">
+                                                                                💥 Blunders ({userBlunders.length})
+                                                                            </div>
+                                                                            <div className="text-xs space-y-1">
+                                                                                {userBlunders.slice(0, 5).map((b, i) => (
+                                                                                    <div
+                                                                                        key={i}
+                                                                                        className={`bg-red-50 p-2 rounded ${b.fen ? 'cursor-pointer hover:bg-red-100 transition-colors' : ''}`}
+                                                                                        onClick={() => {
+                                                                                            if (b.fen) {
+                                                                                                setSelectedPosition({
+                                                                                                    fen: b.fen,
+                                                                                                    played: b.played,
+                                                                                                    best: b.best,
+                                                                                                    playedUci: b.played_uci,
+                                                                                                    bestUci: b.best_uci,
+                                                                                                    orientation: isUserBlack ? 'black' : 'white',
+                                                                                                    whitePlayer: r.white,
+                                                                                                    blackPlayer: r.black
+                                                                                                })
+                                                                                            }
+                                                                                        }}
+                                                                                    >
+                                                                                        <span className="font-medium">Move {b.move_number}:</span> played <span className="font-mono bg-red-100 px-1 rounded">{b.played}</span>
+                                                                                        {' '}→ best: <span className="font-mono bg-green-100 px-1 rounded">{b.best}</span>
+                                                                                        {b.fen && (
+                                                                                            <span className="ml-2 flex-shrink-0 inline-flex gap-1">
+                                                                                                <span className="text-blue-600">🔍 View</span>
+                                                                                                <span
+                                                                                                    className="text-purple-600 hover:text-purple-800 cursor-pointer"
+                                                                                                    onClick={(e) => {
+                                                                                                        e.stopPropagation()
+                                                                                                        if (b.fen) {
+                                                                                                            setPracticePosition({
+                                                                                                                fen: b.fen,
+                                                                                                                played: b.played,
+                                                                                                                best: b.best,
+                                                                                                                playedUci: b.played_uci || '',
+                                                                                                                bestUci: b.best_uci || '',
+                                                                                                                orientation: isUserBlack ? 'black' : 'white',
+                                                                                                                whitePlayer: r.white,
+                                                                                                                blackPlayer: r.black
+                                                                                                            })
+                                                                                                        }
+                                                                                                    }}
+                                                                                                >🎯 Practice</span>
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
                                                                         </div>
-                                                                        <div className="text-xs space-y-1">
-                                                                            {r.blunders.slice(0, 5).map((b, i) => (
-                                                                                <div
-                                                                                    key={i}
-                                                                                    className={`bg-red-50 p-2 rounded ${b.fen ? 'cursor-pointer hover:bg-red-100 transition-colors' : ''}`}
-                                                                                    onClick={() => {
-                                                                                        if (b.fen) {
-                                                                                            const isUserBlack = usernames.some(u => r.black.toLowerCase().includes(u))
-                                                                                            setSelectedPosition({
-                                                                                                fen: b.fen,
-                                                                                                played: b.played,
-                                                                                                best: b.best,
-                                                                                                orientation: isUserBlack ? 'black' : 'white',
-                                                                                                whitePlayer: r.white,
-                                                                                                blackPlayer: r.black
-                                                                                            })
-                                                                                        }
-                                                                                    }}
-                                                                                >
-                                                                                    <span className="font-medium">Move {b.move_number}:</span> {b.player} played <span className="font-mono bg-red-100 px-1 rounded">{b.played}</span>
-                                                                                    {' '}→ best: <span className="font-mono bg-green-100 px-1 rounded">{b.best}</span>
-                                                                                    {b.fen && <span className="ml-2 text-blue-600">🔍 View</span>}
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
-                                                                    </div>
-                                                                )}
+                                                                    ) : null
+                                                                })()}
 
-                                                                {/* Mistakes */}
-                                                                {r.mistakes && r.mistakes.length > 0 && (
-                                                                    <div>
-                                                                        <div className="text-sm font-medium text-yellow-600 mb-1">
-                                                                            ⚠️ Mistakes ({r.mistakes.length})
+                                                                {/* Mistakes - filtered to user's perspective only */}
+                                                                {(() => {
+                                                                    const isUserBlack = usernames.some(u => r.black.toLowerCase().includes(u))
+                                                                    const userSide = isUserBlack ? 'black' : 'white'
+                                                                    const userMistakes = (r.mistakes || []).filter(m => m.player === userSide)
+                                                                    return userMistakes.length > 0 ? (
+                                                                        <div>
+                                                                            <div className="text-sm font-medium text-yellow-600 mb-1">
+                                                                                ⚠️ Mistakes ({userMistakes.length})
+                                                                            </div>
+                                                                            <div className="text-xs space-y-1">
+                                                                                {userMistakes.slice(0, 5).map((m, i) => (
+                                                                                    <div
+                                                                                        key={i}
+                                                                                        className={`bg-yellow-50 p-2 rounded ${m.fen ? 'cursor-pointer hover:bg-yellow-100 transition-colors' : ''}`}
+                                                                                        onClick={() => {
+                                                                                            if (m.fen) {
+                                                                                                setSelectedPosition({
+                                                                                                    fen: m.fen,
+                                                                                                    played: m.played,
+                                                                                                    best: m.best,
+                                                                                                    playedUci: m.played_uci,
+                                                                                                    bestUci: m.best_uci,
+                                                                                                    orientation: isUserBlack ? 'black' : 'white',
+                                                                                                    whitePlayer: r.white,
+                                                                                                    blackPlayer: r.black
+                                                                                                })
+                                                                                            }
+                                                                                        }}
+                                                                                    >
+                                                                                        <span className="font-medium">Move {m.move_number}:</span> played <span className="font-mono bg-yellow-100 px-1 rounded">{m.played}</span>
+                                                                                        {' '}→ best: <span className="font-mono bg-green-100 px-1 rounded">{m.best}</span>
+                                                                                        {m.fen && (
+                                                                                            <span className="ml-2 flex-shrink-0 inline-flex gap-1">
+                                                                                                <span className="text-blue-600">🔍 View</span>
+                                                                                                <span
+                                                                                                    className="text-purple-600 hover:text-purple-800 cursor-pointer"
+                                                                                                    onClick={(e) => {
+                                                                                                        e.stopPropagation()
+                                                                                                        if (m.fen) {
+                                                                                                            setPracticePosition({
+                                                                                                                fen: m.fen,
+                                                                                                                played: m.played,
+                                                                                                                best: m.best,
+                                                                                                                playedUci: m.played_uci || '',
+                                                                                                                bestUci: m.best_uci || '',
+                                                                                                                orientation: isUserBlack ? 'black' : 'white',
+                                                                                                                whitePlayer: r.white,
+                                                                                                                blackPlayer: r.black
+                                                                                                            })
+                                                                                                        }
+                                                                                                    }}
+                                                                                                >🎯 Practice</span>
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
                                                                         </div>
-                                                                        <div className="text-xs space-y-1">
-                                                                            {r.mistakes.slice(0, 5).map((m, i) => (
-                                                                                <div
-                                                                                    key={i}
-                                                                                    className={`bg-yellow-50 p-2 rounded ${m.fen ? 'cursor-pointer hover:bg-yellow-100 transition-colors' : ''}`}
-                                                                                    onClick={() => {
-                                                                                        if (m.fen) {
-                                                                                            const isUserBlack = usernames.some(u => r.black.toLowerCase().includes(u))
-                                                                                            setSelectedPosition({
-                                                                                                fen: m.fen,
-                                                                                                played: m.played,
-                                                                                                best: m.best,
-                                                                                                orientation: isUserBlack ? 'black' : 'white',
-                                                                                                whitePlayer: r.white,
-                                                                                                blackPlayer: r.black
-                                                                                            })
-                                                                                        }
-                                                                                    }}
-                                                                                >
-                                                                                    <span className="font-medium">Move {m.move_number}:</span> {m.player} played <span className="font-mono bg-yellow-100 px-1 rounded">{m.played}</span>
-                                                                                    {' '}→ best: <span className="font-mono bg-green-100 px-1 rounded">{m.best}</span>
-                                                                                    {m.fen && <span className="ml-2 text-blue-600">🔍 View</span>}
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
-                                                                    </div>
-                                                                )}
+                                                                    ) : null
+                                                                })()}
                                                             </div>
                                                         )}
                                                     </div>
@@ -533,10 +602,27 @@ export default function AnalysisResults() {
                     fen={selectedPosition.fen}
                     playedMove={selectedPosition.played}
                     bestMove={selectedPosition.best}
+                    playedUci={selectedPosition.playedUci}
+                    bestUci={selectedPosition.bestUci}
                     onClose={() => setSelectedPosition(null)}
                     orientation={selectedPosition.orientation}
                     whitePlayer={selectedPosition.whitePlayer}
                     blackPlayer={selectedPosition.blackPlayer}
+                />
+            )}
+
+            {/* Practice Modal */}
+            {practicePosition && (
+                <PracticeModal
+                    originalFen={practicePosition.fen}
+                    playedMove={practicePosition.played}
+                    bestMove={practicePosition.best}
+                    playedUci={practicePosition.playedUci}
+                    bestUci={practicePosition.bestUci}
+                    onClose={() => setPracticePosition(null)}
+                    orientation={practicePosition.orientation}
+                    whitePlayer={practicePosition.whitePlayer}
+                    blackPlayer={practicePosition.blackPlayer}
                 />
             )}
 

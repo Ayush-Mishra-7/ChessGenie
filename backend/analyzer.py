@@ -190,11 +190,13 @@ def analyze_game_sync(
                 eval_after = _get_score(after_info, chess.WHITE)
                 
                 # Calculate centipawn loss (from the perspective of the player who moved)
+                # Cap at 500cp to prevent mate-score conversions (10000+) from
+                # inflating the average beyond 200cp and causing 0% accuracy
                 if is_white:
-                    cp_loss = max(0, eval_before - eval_after)
+                    cp_loss = min(500, max(0, eval_before - eval_after))
                     white_losses.append(cp_loss)
                 else:
-                    cp_loss = max(0, eval_after - eval_before)  # Black wants eval to go down
+                    cp_loss = min(500, max(0, eval_after - eval_before))  # Black wants eval to go down
                     black_losses.append(cp_loss)
                 
                 classification = classify_move(cp_loss)

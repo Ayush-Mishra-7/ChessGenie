@@ -8,6 +8,7 @@ This service handles:
 """
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import os
 import json
 import logging
@@ -15,6 +16,10 @@ from datetime import datetime
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from contextlib import asynccontextmanager
+import sys
+
+# Add current directory to sys.path to resolve imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from game_fetcher import fetch_games, FetchedGame
 
@@ -401,3 +406,45 @@ async def get_user_games(user_id: str, limit: int = 50):
             })
         
         return {'games': games, 'total': len(games)}
+
+
+# ── Position Generator Endpoint ─────────────────────────────────
+
+class PositionRequest(BaseModel):
+    fen: str
+    played_uci: str
+    best_uci: str
+    count: int = 10
+
+
+@app.post('/generate-positions')
+async def generate_positions_endpoint(req: PositionRequest):
+    """
+    Generate similar practice positions from a mistake/blunder FEN.
+    
+    Takes the position FEN, the mistake move, and the best move,
+    then returns ~10 similar positions for practice.
+    """
+    try:
+        from position_generator import generate_similar_positions, positions_to_dicts
+        
+        # Run in executor to avoid blocking
+        import asyncio
+        loop = asyncio.get_event_loop()
+        positions = await loop.run_in_executor(
+            None,
+            lambda: generate_similar_positions(
+                req.fen, req.played_uci, req.best_uci, 
+                count=req.count, use_stockfish=True
+            )
+        )
+        
+        return {
+            'positions': positions_to_dicts(positions),
+            'original_fen': req.fen,
+            'count': len(positions)
+        }
+    except Exception as e:
+        logger.error(f"Position generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

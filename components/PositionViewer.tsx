@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Chessboard } from 'react-chessboard'
 import LiveAnalysis from './LiveAnalysis'
 import { useStockfish } from '@/hooks/useStockfish'
@@ -9,16 +9,33 @@ type PositionViewerProps = {
     fen: string
     playedMove: string
     bestMove: string
+    playedUci?: string
+    bestUci?: string
     onClose: () => void
     orientation?: 'white' | 'black'
     whitePlayer?: string
     blackPlayer?: string
 }
 
+/**
+ * Convert a UCI move string (e.g. "e2e4") to arrow squares.
+ * Returns { startSquare, endSquare } or null if invalid.
+ */
+function uciToSquares(uci?: string): { startSquare: string; endSquare: string } | null {
+    if (!uci || uci.length < 4) return null
+    const from = uci.substring(0, 2)
+    const to = uci.substring(2, 4)
+    // Validate squares are in range a-h, 1-8
+    if (!/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) return null
+    return { startSquare: from, endSquare: to }
+}
+
 export default function PositionViewer({
     fen,
     playedMove,
     bestMove,
+    playedUci,
+    bestUci,
     onClose,
     orientation = 'white',
     whitePlayer = 'White',
@@ -34,6 +51,31 @@ export default function PositionViewer({
 
     const topPlayer = orientation === 'white' ? blackPlayer : whitePlayer
     const bottomPlayer = orientation === 'white' ? whitePlayer : blackPlayer
+
+    // Build arrows: red for played move (mistake), green for best move
+    const arrows = useMemo(() => {
+        const result: { startSquare: string; endSquare: string; color: string }[] = []
+
+        const bestSquares = uciToSquares(bestUci)
+        if (bestSquares) {
+            result.push({
+                startSquare: bestSquares.startSquare,
+                endSquare: bestSquares.endSquare,
+                color: 'rgba(0, 180, 0, 0.7)'  // Green - best move
+            })
+        }
+
+        const playedSquares = uciToSquares(playedUci)
+        if (playedSquares) {
+            result.push({
+                startSquare: playedSquares.startSquare,
+                endSquare: playedSquares.endSquare,
+                color: 'rgba(220, 50, 50, 0.7)'  // Red - played (mistake)
+            })
+        }
+
+        return result
+    }, [playedUci, bestUci])
 
     return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
@@ -70,7 +112,8 @@ export default function PositionViewer({
                                 position: fen,
                                 animationDurationInMs: 0,
                                 allowDragging: false,
-                                boardOrientation: orientation
+                                boardOrientation: orientation,
+                                arrows: arrows,
                             }}
                         />
                     </div>
@@ -82,6 +125,24 @@ export default function PositionViewer({
                         </div>
                         {bottomPlayer}
                     </div>
+
+                    {/* Arrow Legend */}
+                    {(playedUci || bestUci) && (
+                        <div className="w-[320px] flex items-center justify-center gap-4 text-xs text-gray-500 mt-1">
+                            {playedUci && (
+                                <span className="flex items-center gap-1">
+                                    <span className="inline-block w-3 h-1.5 rounded" style={{ backgroundColor: 'rgba(220, 50, 50, 0.7)' }}></span>
+                                    Played
+                                </span>
+                            )}
+                            {bestUci && (
+                                <span className="flex items-center gap-1">
+                                    <span className="inline-block w-3 h-1.5 rounded" style={{ backgroundColor: 'rgba(0, 180, 0, 0.7)' }}></span>
+                                    Best
+                                </span>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {/* Live Analysis */}
