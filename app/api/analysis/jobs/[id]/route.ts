@@ -31,7 +31,12 @@ export async function DELETE(
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
         }
 
-        // Delete the job (Cascades to GameAnalysis due to schema relation)
+        // Delete associated games first (since no cascade on delete in schema)
+        await prisma.gameAnalysis.deleteMany({
+            where: { jobId: jobId }
+        })
+
+        // Delete the job
         await prisma.job.delete({
             where: { id: jobId }
         })

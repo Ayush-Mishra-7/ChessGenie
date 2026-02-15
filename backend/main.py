@@ -97,19 +97,28 @@ async def process_job(job_id: str, background_tasks: BackgroundTasks):
         if not job_row:
             raise HTTPException(status_code=404, detail='Job not found')
 
-        job_status = job_row[3]
-        if job_status != 'QUEUED':
+        # Atomic update to mark job as RUNNING only if it is QUEUED
+        result = conn.execute(
+            text('UPDATE "Job" SET status = :s, "updatedAt" = now() WHERE id = :id AND status = :old_s'),
+            {'s': 'RUNNING', 'id': job_id, 'old_s': 'QUEUED'}
+        )
+        conn.commit()
+        
+        # Check if update was successful (row count > 0)
+        if result.rowcount == 0:
+            # Check current status to give appropriate error
+            job_status = conn.execute(
+                text('SELECT status FROM "Job" WHERE id = :id'),
+                {'id': job_id}
+            ).scalar()
+            
+            if not job_status:
+                raise HTTPException(status_code=404, detail='Job not found')
+            
             raise HTTPException(
                 status_code=400, 
                 detail=f'Job is not queued (current status: {job_status})'
             )
-
-        # Mark job as running
-        conn.execute(
-            text('UPDATE "Job" SET status = :s, "updatedAt" = now() WHERE id = :id'),
-            {'s': 'RUNNING', 'id': job_id}
-        )
-        conn.commit()
 
     # Process job in background
     background_tasks.add_task(
@@ -285,27 +294,32 @@ async def _process_job_task(job_id: str, user_id: str, payload):
                 'accuracy_black': result_data.get('accuracy_black')
             }
         
-        if stockfish_available and games_to_analyze:
-            # Use parallel analysis - stream results as each game completes
-            async for analysis_result in analyze_games_parallel(
-                games_to_analyze, 
-                depth=analysis_depth,
-                max_workers=2  # Limit concurrent Stockfish instances
-            ):
-                game_counter[0] += 1
-                ga_id = f"{job_id}_g{game_counter[0]}"
-                game = game_lookup.get(analysis_result.game_id)
-                
+        if stockfish_available:
+            if games_to_analyze:
+                # Use parallel analysis - stream results as each game completes
+                async for analysis_result in analyze_games_parallel(
+                    games_to_analyze, 
+                    depth=analysis_depth,
+                    max_workers=2  # Limit concurrent Stockfish instances
+                ):
+                    game_counter[0] += 1
+                    ga_id = f"{job_id}_g{game_counter[0]}"
+                    game = game_lookup.get(analysis_result.game_id)
+                    
+                    if game:
+                        analysis_info = store_game_result(game, analysis_result, ga_id)
+                        analyses.append(analysis_info)
+                        logger.info(f"Stored game {game_counter[0]}/{len(games)}: {game.white} vs {game.black}")
+        elif games_to_analyze:
+            # No Stockfish - just store remaining games without analysis
+            # Only process games that weren't cached
+            for game_id, _ in games_to_analyze:
+                game = game_lookup.get(game_id)
                 if game:
-                    analysis_info = store_game_result(game, analysis_result, ga_id)
+                    game_counter[0] += 1
+                    ga_id = f"{job_id}_g{game_counter[0]}"
+                    analysis_info = store_game_result(game, None, ga_id)
                     analyses.append(analysis_info)
-                    logger.info(f"Stored game {game_counter[0]}/{len(games)}: {game.white} vs {game.black}")
-        else:
-            # No Stockfish - just store games without analysis
-            for i, game in enumerate(games):
-                ga_id = f"{job_id}_g{i}"
-                analysis_info = store_game_result(game, None, ga_id)
-                analyses.append(analysis_info)
         
         # Mark job as completed
         with engine.connect() as conn:
