@@ -38,6 +38,7 @@ class MistakePattern:
     core_squares: Set[int]          # Squares critical to the tactic
     peripheral_squares: Set[int]    # Squares with non-critical pieces
     side_to_move: bool              # chess.WHITE or chess.BLACK
+    motifs: List[str]               # Detected tactical motifs (fork, pin, etc.)
     
 
 @dataclass 
@@ -49,6 +50,7 @@ class GeneratedPosition:
     difficulty: str          # "easy", "medium", "hard"
     method: str              # Which perturbation created this
     eval_change: int         # Centipawn change if wrong move played
+    motifs: List[str]        # Tactical motifs present in this position
 
 
 def find_stockfish() -> Optional[Path]:
@@ -63,10 +65,98 @@ def find_stockfish() -> Optional[Path]:
     return None
 
 
+def detect_motifs(board: chess.Board, best_move: chess.Move, pv: List[chess.Move] = None) -> List[str]:
+    """Detect tactical motifs in a position."""
+    motifs = []
+    
+    # If we have PV, use it to check future boards
+    full_sequence = [best_move]
+    if pv and len(pv) > 1:
+        full_sequence = pv
+    
+    # 1. Check for Sacrifice (best move captures a piece, but then we lose material for a mate/win)
+    # Or simply: we play a move that seems to lose material but leads to a forced win.
+    moving_piece = board.piece_at(best_move.from_square)
+    if moving_piece:
+        test_board = board.copy()
+        test_board.push(best_move)
+        
+        # Simple sacrifice check: move a piece to a square where it can be captured by a lower-value piece
+        # and it's actually captured in the PV.
+        if len(full_sequence) > 1:
+            next_move = full_sequence[1]
+            if board.piece_at(next_move.to_square) == moving_piece:
+                # Our piece was captured!
+                captured_by = board.piece_at(next_move.from_square)
+                if captured_by:
+                    values = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 0}
+                    if values.get(moving_piece.piece_type, 0) > values.get(captured_by.piece_type, 0):
+                        motifs.append("sacrifice")
+
+    # 2. Check for Mate in the sequence
+    final_board = board.copy()
+    for move in full_sequence:
+        final_board.push(move)
+    
+    if final_board.is_checkmate():
+        motifs.append("mate-threat")
+        # Check if it's a smothered mate
+        enemy_king = final_board.king(not board.turn)
+        is_smothered = True
+        for sq in final_board.attacks(enemy_king):
+            p = final_board.piece_at(sq)
+            if not p or p.color == board.turn:
+                is_smothered = False
+                break
+        if is_smothered:
+            motifs.append("smothered-mate")
+            
+        # Check if it's a back-rank mate
+        rank = chess.square_rank(enemy_king)
+        if rank in [0, 7]:
+            # King on back rank
+            # Check if blocked by own pawns in the final position
+            file = chess.square_file(enemy_king)
+            blocked_count = 0
+            for f in range(max(0, file-1), min(8, file+2)):
+                r = 1 if rank == 0 else 6
+                blocking_pawn = final_board.piece_at(chess.square(f, r))
+                if blocking_pawn and blocking_pawn.piece_type == chess.PAWN and blocking_pawn.color == (not board.turn):
+                    blocked_count += 1
+            if blocked_count >= 2:
+                motifs.append("back-rank")
+
+    # 3. Check for Fork
+    # A fork is when a piece attacks two or more pieces of greater value, or the king.
+    test_board = board.copy()
+    test_board.push(best_move)
+    attacks = test_board.attacks(best_move.to_square)
+    attacked_pieces = []
+    for sq in attacks:
+        p = test_board.piece_at(sq)
+        if p and p.color != board.turn:
+            attacked_pieces.append(p)
+    
+    has_king = any(p.piece_type == chess.KING for p in attacked_pieces)
+    valuable = [p for p in attacked_pieces if p.piece_type in [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]]
+    
+    if (has_king and len(valuable) >= 1) or len(valuable) >= 2:
+        motifs.append("fork")
+
+    # 4. Pin/Skewer
+    core_temp = set()
+    _add_pin_pieces(board, board.turn, core_temp)
+    if core_temp:
+        motifs.append("pin/skewer")
+
+    return list(set(motifs))
+
+
 def extract_mistake_pattern(
     fen: str, 
     played_uci: str, 
-    best_uci: str
+    best_uci: str,
+    depth: int = VERIFY_DEPTH
 ) -> Optional[MistakePattern]:
     """
     Analyze the position to identify which pieces are 'core' to the tactic
@@ -97,43 +187,81 @@ def extract_mistake_pattern(
         # Build the set of "core" squares - pieces critical to the tactic
         core_squares = set()
         
+        # 0. Get PV for motif detection and importance tracing
+        pv = []
+        stockfish_path = find_stockfish()
+        if stockfish_path:
+            try:
+                with chess.engine.SimpleEngine.popen_uci(str(stockfish_path)) as engine:
+                    res = engine.analyse(board, chess.engine.Limit(depth=depth))
+                    pv = res.get("pv", [])
+            except:
+                pass
+        
         # 1. The moving piece and its target
         core_squares.add(moving_sq)
         core_squares.add(target_sq)
         
-        # 2. Both kings (always core - can't remove/move them freely)
+        # 2. Both kings (always core)
         core_squares.add(board.king(chess.WHITE))
         core_squares.add(board.king(chess.BLACK))
         
-        # 3. Pieces that attack the target square (defenders and supporters)
+        # 3. PV pieces - any piece that moves or is captured in the PV is core
+        temp_board = board.copy()
+        for move in pv[:4]: # Trace first 4 moves
+            core_squares.add(move.from_square)
+            core_squares.add(move.to_square)
+            # Defenders of squares in PV
+            core_squares.update(board.attackers(chess.WHITE, move.to_square))
+            core_squares.update(board.attackers(chess.BLACK, move.to_square))
+            temp_board.push(move)
+        
+        # 4. Pieces that attack the target square
         core_squares.update(board.attackers(chess.WHITE, target_sq))
         core_squares.update(board.attackers(chess.BLACK, target_sq))
         
-        # 4. Pieces that attack the moving piece's square (they constrain it)
+        # 5. Pieces that attack the moving piece's square
         core_squares.update(board.attackers(chess.WHITE, moving_sq))
         core_squares.update(board.attackers(chess.BLACK, moving_sq))
         
-        # 5. If the best move is a discovered attack, find the piece being unblocked
-        #    After the best move, check if new attacks appear from the moving piece's file/rank/diagonal
+        # 6. Discovered attacks
         test_board = board.copy()
         test_board.push(best_move)
-        # Squares now attacked by the moving side that weren't before
         for sq in chess.SQUARES:
             piece = board.piece_at(sq)
             if piece and piece.color == side and sq != moving_sq:
-                # Check if this piece gains new attacks after the move
                 old_attacks = board.attacks(sq)
                 new_attacks = test_board.attacks(sq)
                 gained = new_attacks & ~old_attacks
                 if gained:
-                    # This piece benefits from the discovered attack
                     core_squares.add(sq)
                     core_squares.update(gained & test_board.occupied_co[not side])
         
-        # 6. Pieces on the same rank/file/diagonal as a pin/skewer line
+        # 7. Pins/Skewers
         _add_pin_pieces(board, side, core_squares)
+
+        # 8. Motif detection
+        motifs = detect_motifs(board, best_move, pv)
         
-        # Build peripheral squares - all occupied squares NOT in core
+        # 9. Special handling for certain motifs
+        if "smothered-mate" in motifs:
+            enemy_king = board.king(not side)
+            for sq in board.attacks(enemy_king):
+                p = board.piece_at(sq)
+                if p and p.color != side:
+                    core_squares.add(sq)
+        
+        if "back-rank" in motifs:
+            enemy_king = board.king(not side)
+            rank = chess.square_rank(enemy_king)
+            file = chess.square_file(enemy_king)
+            for f in range(max(0, file-1), min(8, file+2)):
+                r = 1 if rank == 0 else 6
+                sq = chess.square(f, r)
+                if board.piece_at(sq):
+                    core_squares.add(sq)
+
+        # Build peripheral squares
         peripheral_squares = set()
         for sq in chess.SQUARES:
             if board.piece_at(sq) and sq not in core_squares:
@@ -148,7 +276,8 @@ def extract_mistake_pattern(
             target_square=target_sq,
             core_squares=core_squares,
             peripheral_squares=peripheral_squares,
-            side_to_move=side
+            side_to_move=side,
+            motifs=motifs
         )
         
     except Exception as e:
@@ -487,12 +616,12 @@ def _stockfish_verify(
     expected_target: Optional[int],  # Expected target square (can be mirrored)
     original_best_uci: str,
     depth: int = VERIFY_DEPTH
-) -> Optional[Tuple[str, str, int]]:
+) -> Optional[Tuple[str, str, int, List[str]]]:
     """
     Quick Stockfish check to see if the position has a clear best move
     that involves a similar tactical idea.
     
-    Returns (best_move_uci, best_move_san, eval_advantage) or None.
+    Returns (best_move_uci, best_move_san, eval_advantage, motifs) or None.
     """
     stockfish_path = find_stockfish()
     if not stockfish_path:
@@ -529,8 +658,11 @@ def _stockfish_verify(
             if cp_advantage < 50:  # Less than 0.5 pawn advantage
                 return None
             
+            # Detect motifs in the new position
+            motifs = detect_motifs(board, best_move)
+            
             best_san = board.san(best_move)
-            return (best_move.uci(), best_san, cp_advantage)
+            return (best_move.uci(), best_san, cp_advantage, motifs)
             
         finally:
             engine.quit()
@@ -695,14 +827,15 @@ def generate_similar_positions(
                     )
                     
                     if result:
-                        move_uci, move_san, eval_adv = result
+                        move_uci, move_san, eval_adv, motifs = result
                         candidates.append(GeneratedPosition(
                             fen=new_fen,
                             correct_move_uci=move_uci,
                             correct_move_san=move_san,
                             difficulty=_get_difficulty(eval_adv),
                             method=strategy_name,
-                            eval_change=eval_adv
+                            eval_change=eval_adv,
+                            motifs=motifs
                         ))
                 else:
                     # Without Stockfish, just return valid positions
@@ -713,7 +846,8 @@ def generate_similar_positions(
                         correct_move_san="",
                         difficulty="unknown",
                         method=strategy_name,
-                        eval_change=0
+                        eval_change=0,
+                        motifs=pattern.motifs
                     ))
                     
             except Exception as e:
@@ -758,7 +892,8 @@ def _chain(board: Optional[chess.Board], fn) -> Optional[chess.Board]:
             target_square=0,
             core_squares=set(),
             peripheral_squares={sq for sq in chess.SQUARES if board.piece_at(sq)},
-            side_to_move=board.turn
+            side_to_move=board.turn,
+            motifs=[]
         )
         return fn(board, pattern) if callable(fn) else None
     except Exception:

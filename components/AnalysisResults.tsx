@@ -269,7 +269,7 @@ export default function AnalysisResults() {
         )
     }
 
-    if (games.length === 0) {
+    if (games.length === 0 && jobs.length === 0) {
         return (
             <div className="bg-white p-6 rounded shadow">
                 <div className="flex items-center justify-between mb-4">
@@ -416,11 +416,37 @@ export default function AnalysisResults() {
                                                                         </div>
                                                                         <div className="text-xs text-gray-500">Black</div>
                                                                     </div>
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation()
+                                                                            if (confirm('Delete this game analysis?')) {
+                                                                                deleteGame(game.id)
+                                                                            }
+                                                                        }}
+                                                                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                                                        title="Delete Game Analysis"
+                                                                    >
+                                                                        🗑️
+                                                                    </button>
                                                                 </div>
                                                             ) : (
-                                                                <span className="text-xs text-yellow-600 bg-yellow-100 px-2 py-1 rounded">
-                                                                    Pending
-                                                                </span>
+                                                                <div className="flex items-center gap-3">
+                                                                    <span className="text-xs text-yellow-600 bg-yellow-100 px-2 py-1 rounded">
+                                                                        Pending
+                                                                    </span>
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation()
+                                                                            if (confirm('Delete this game?')) {
+                                                                                deleteGame(game.id)
+                                                                            }
+                                                                        }}
+                                                                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                                                        title="Delete Game"
+                                                                    >
+                                                                        🗑️
+                                                                    </button>
+                                                                </div>
                                                             )}
                                                         </div>
 

@@ -8,7 +8,6 @@ This service handles:
 """
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import os
 import json
 import logging
@@ -16,12 +15,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from contextlib import asynccontextmanager
-import sys
 
-# Add current directory to sys.path to resolve imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from game_fetcher import fetch_games, FetchedGame
+from .game_fetcher import fetch_games, FetchedGame
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -97,28 +92,19 @@ async def process_job(job_id: str, background_tasks: BackgroundTasks):
         if not job_row:
             raise HTTPException(status_code=404, detail='Job not found')
 
-        # Atomic update to mark job as RUNNING only if it is QUEUED
-        result = conn.execute(
-            text('UPDATE "Job" SET status = :s, "updatedAt" = now() WHERE id = :id AND status = :old_s'),
-            {'s': 'RUNNING', 'id': job_id, 'old_s': 'QUEUED'}
-        )
-        conn.commit()
-        
-        # Check if update was successful (row count > 0)
-        if result.rowcount == 0:
-            # Check current status to give appropriate error
-            job_status = conn.execute(
-                text('SELECT status FROM "Job" WHERE id = :id'),
-                {'id': job_id}
-            ).scalar()
-            
-            if not job_status:
-                raise HTTPException(status_code=404, detail='Job not found')
-            
+        job_status = job_row[3]
+        if job_status != 'QUEUED':
             raise HTTPException(
                 status_code=400, 
                 detail=f'Job is not queued (current status: {job_status})'
             )
+
+        # Mark job as running
+        conn.execute(
+            text('UPDATE "Job" SET status = :s, "updatedAt" = now() WHERE id = :id'),
+            {'s': 'RUNNING', 'id': job_id}
+        )
+        conn.commit()
 
     # Process job in background
     background_tasks.add_task(
@@ -156,7 +142,7 @@ async def _process_job_task(job_id: str, user_id: str, payload):
         logger.info(f"Fetched {len(games)} games. Starting Stockfish analysis...")
         
         # Import analyzer (do it here to avoid import issues if Stockfish not installed)
-        from analyzer import analyze_games_parallel, find_stockfish
+        from .analyzer import analyze_games_parallel, find_stockfish
         
         stockfish_available = find_stockfish() is not None
         if not stockfish_available:
@@ -178,58 +164,17 @@ async def _process_job_task(job_id: str, user_id: str, payload):
                 cached_analyses[row[0]] = row[1]
         
         # Separate games into cached and need-analysis
-        analyses = []
-        game_counter = [0]
         games_to_analyze = []
         game_lookup = {}
-        
         for game in games:
             game_lookup[game.game_id] = game
-            
-            # Check for cached analysis
-            if game.game_id in cached_analyses:
-                # Reuse existing analysis for this new job record
-                game_counter[0] += 1
-                ga_id = f"{job_id}_g{game_counter[0]}"
-                cached_result = cached_analyses[game.game_id]
-                
-                # Create a new record in DB with copied result
-                try:
-                    with engine.connect() as conn:
-                        conn.execute(
-                            text('''
-                                INSERT INTO "GameAnalysis" 
-                                (id, "userId", "jobId", "gameId", pgn, result, "createdAt", "updatedAt") 
-                                VALUES (:id, :userId, :jobId, :gameId, :pgn, :result, now(), now())
-                            '''),
-                            {
-                                'id': ga_id,
-                                'userId': user_id,
-                                'jobId': job_id,
-                                'gameId': game.game_id,
-                                'pgn': game.pgn,
-                                'result': json.dumps(cached_result) if isinstance(cached_result, dict) else cached_result
-                            }
-                        )
-                        conn.commit()
-                    
-                    # Add to analyses list for the job result
-                    analyses.append({
-                        'id': ga_id, 
-                        'gameId': game.game_id,
-                        'status': 'analyzed' # It was cached
-                    })
-                    logger.info(f"Using cached analysis for game {game_counter[0]}/{len(games)}")
-                except Exception as e:
-                    logger.error(f"Failed to use cached analysis: {e}")
-                    # If cache copy fails, fallback to re-analyzing
-                    if game.pgn:
-                        games_to_analyze.append((game.game_id, game.pgn))
-
-            elif game.pgn:
+            if game.game_id not in cached_analyses and game.pgn:
                 games_to_analyze.append((game.game_id, game.pgn))
         
-        logger.info(f"Using {len(analyses)} cached analyses, {len(games_to_analyze)} need analysis")
+        logger.info(f"Found {len(cached_analyses)} cached analyses, {len(games_to_analyze)} need analysis")
+        
+        analyses = []
+        game_counter = [0]  # Use list to allow mutation in closure
         
         def store_game_result(game, analysis_result, ga_id):
             """Store a single game result to database immediately."""
@@ -294,32 +239,27 @@ async def _process_job_task(job_id: str, user_id: str, payload):
                 'accuracy_black': result_data.get('accuracy_black')
             }
         
-        if stockfish_available:
-            if games_to_analyze:
-                # Use parallel analysis - stream results as each game completes
-                async for analysis_result in analyze_games_parallel(
-                    games_to_analyze, 
-                    depth=analysis_depth,
-                    max_workers=2  # Limit concurrent Stockfish instances
-                ):
-                    game_counter[0] += 1
-                    ga_id = f"{job_id}_g{game_counter[0]}"
-                    game = game_lookup.get(analysis_result.game_id)
-                    
-                    if game:
-                        analysis_info = store_game_result(game, analysis_result, ga_id)
-                        analyses.append(analysis_info)
-                        logger.info(f"Stored game {game_counter[0]}/{len(games)}: {game.white} vs {game.black}")
-        elif games_to_analyze:
-            # No Stockfish - just store remaining games without analysis
-            # Only process games that weren't cached
-            for game_id, _ in games_to_analyze:
-                game = game_lookup.get(game_id)
+        if stockfish_available and games_to_analyze:
+            # Use parallel analysis - stream results as each game completes
+            async for analysis_result in analyze_games_parallel(
+                games_to_analyze, 
+                depth=analysis_depth,
+                max_workers=2  # Limit concurrent Stockfish instances
+            ):
+                game_counter[0] += 1
+                ga_id = f"{job_id}_g{game_counter[0]}"
+                game = game_lookup.get(analysis_result.game_id)
+                
                 if game:
-                    game_counter[0] += 1
-                    ga_id = f"{job_id}_g{game_counter[0]}"
-                    analysis_info = store_game_result(game, None, ga_id)
+                    analysis_info = store_game_result(game, analysis_result, ga_id)
                     analyses.append(analysis_info)
+                    logger.info(f"Stored game {game_counter[0]}/{len(games)}: {game.white} vs {game.black}")
+        else:
+            # No Stockfish - just store games without analysis
+            for i, game in enumerate(games):
+                ga_id = f"{job_id}_g{i}"
+                analysis_info = store_game_result(game, None, ga_id)
+                analyses.append(analysis_info)
         
         # Mark job as completed
         with engine.connect() as conn:
@@ -420,45 +360,3 @@ async def get_user_games(user_id: str, limit: int = 50):
             })
         
         return {'games': games, 'total': len(games)}
-
-
-# ── Position Generator Endpoint ─────────────────────────────────
-
-class PositionRequest(BaseModel):
-    fen: str
-    played_uci: str
-    best_uci: str
-    count: int = 10
-
-
-@app.post('/generate-positions')
-async def generate_positions_endpoint(req: PositionRequest):
-    """
-    Generate similar practice positions from a mistake/blunder FEN.
-    
-    Takes the position FEN, the mistake move, and the best move,
-    then returns ~10 similar positions for practice.
-    """
-    try:
-        from position_generator import generate_similar_positions, positions_to_dicts
-        
-        # Run in executor to avoid blocking
-        import asyncio
-        loop = asyncio.get_event_loop()
-        positions = await loop.run_in_executor(
-            None,
-            lambda: generate_similar_positions(
-                req.fen, req.played_uci, req.best_uci, 
-                count=req.count, use_stockfish=True
-            )
-        )
-        
-        return {
-            'positions': positions_to_dicts(positions),
-            'original_fen': req.fen,
-            'count': len(positions)
-        }
-    except Exception as e:
-        logger.error(f"Position generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-

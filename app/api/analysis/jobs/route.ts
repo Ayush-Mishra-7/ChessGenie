@@ -16,7 +16,7 @@ export async function GET(req: Request) {
         const jobs = await prisma.job.findMany({
             where: { userId: decoded.id },
             orderBy: { createdAt: 'desc' },
-            take: 10
+            take: 50
         })
 
         return NextResponse.json({

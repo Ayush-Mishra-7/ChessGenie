@@ -17,14 +17,14 @@ export async function GET(req: Request) {
         const games = await prisma.gameAnalysis.findMany({
             where: { userId: decoded.id },
             orderBy: { createdAt: 'desc' },
-            take: 100
+            take: 1000
         })
 
         // Fetch jobs for grouping
         const jobs = await prisma.job.findMany({
             where: { userId: decoded.id },
             orderBy: { createdAt: 'desc' },
-            take: 20
+            take: 100
         })
 
         // Create job summaries for grouping

@@ -10,6 +10,7 @@ type PracticePosition = {
     difficulty: string
     method: string
     eval_change: number
+    motifs?: string[]
 }
 
 type PracticeModalProps = {
@@ -235,17 +236,38 @@ export default function PracticeModal({
                                                             <div className="text-xs text-gray-500 uppercase font-semibold mb-0.5">
                                                                 Best Move
                                                             </div>
-                                                            <span className="text-green-600 font-bold font-mono text-lg">
-                                                                {currentPosition.correct_move_san}
-                                                            </span>
-                                                            <span className="text-gray-400 text-xs ml-2">
-                                                                ({currentPosition.correct_move_uci})
-                                                            </span>
+                                                            <div className="flex items-baseline gap-2">
+                                                                <span className="text-green-600 font-bold font-mono text-lg">
+                                                                    {currentPosition.correct_move_san}
+                                                                </span>
+                                                                <span className="text-gray-400 text-xs">
+                                                                    ({currentPosition.correct_move_uci})
+                                                                </span>
+                                                            </div>
                                                         </div>
                                                         <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">
                                                             +{currentPosition.eval_change}cp
                                                         </span>
                                                     </div>
+                                                    
+                                                    {/* Motifs Display */}
+                                                    {currentPosition.motifs && currentPosition.motifs.length > 0 && (
+                                                        <div className="mt-3 pt-2 border-t border-gray-100">
+                                                            <div className="text-[10px] text-gray-400 uppercase font-bold mb-1 tracking-wider">
+                                                                Tactical Motifs
+                                                            </div>
+                                                            <div className="flex flex-wrap gap-1">
+                                                                {currentPosition.motifs.map(motif => (
+                                                                    <span 
+                                                                        key={motif}
+                                                                        className="bg-purple-50 text-purple-600 text-[10px] px-1.5 py-0.5 rounded font-medium border border-purple-100"
+                                                                    >
+                                                                        {motif.replace('-', ' ')}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <button
