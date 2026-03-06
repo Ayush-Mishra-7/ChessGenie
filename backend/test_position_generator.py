@@ -8,6 +8,7 @@ import time
 import chess
 from position_generator import (
     generate_similar_positions,
+    generate_similar_positions_mvp,
     extract_mistake_pattern,
     positions_to_dicts,
     find_stockfish
@@ -127,6 +128,24 @@ def main():
             if pos.correct_move_san:
                 print(f"  ✅ Correct move: {pos.correct_move_san} ({pos.correct_move_uci})")
             print()
+
+        print("  🧪 MVP response preview...")
+        mvp = generate_similar_positions_mvp(
+            fen,
+            played_uci,
+            best_uci,
+            count=3,
+            difficulty=None,
+            use_stockfish=use_sf,
+            timeout_seconds=6.0,
+            seed=7
+        )
+        for item in mvp.get("generated", []):
+            print(
+                f"     -> {item['generation_method']} | score={item.get('quality_score')} | "
+                f"gap={item.get('eval_gap_cp')} | wrong={item.get('wrong_move_san')}"
+            )
+        print()
         
         print()
 

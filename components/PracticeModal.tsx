@@ -13,6 +13,52 @@ type PracticePosition = {
     motifs?: string[]
 }
 
+type PracticeApiResponse = {
+    positions?: Array<{
+        fen: string
+        correct_move_uci?: string
+        correct_move_san?: string
+        difficulty?: string
+        method?: string
+        eval_change?: number
+        motifs?: string[]
+    }>
+    generated?: Array<{
+        fen: string
+        solution_move_uci?: string
+        solution_move_san?: string
+        difficulty?: string
+        generation_method?: string
+        eval_gap_cp?: number
+        motifs?: string[]
+    }>
+}
+
+function normalizePracticePositions(data: PracticeApiResponse): PracticePosition[] {
+    const legacyPositions = data.positions || []
+    if (legacyPositions.length > 0) {
+        return legacyPositions.map(position => ({
+            fen: position.fen,
+            correct_move_uci: position.correct_move_uci || '',
+            correct_move_san: position.correct_move_san || '',
+            difficulty: position.difficulty || 'medium',
+            method: position.method || 'generated',
+            eval_change: position.eval_change || 0,
+            motifs: position.motifs || []
+        }))
+    }
+
+    return (data.generated || []).map(position => ({
+        fen: position.fen,
+        correct_move_uci: position.solution_move_uci || '',
+        correct_move_san: position.solution_move_san || '',
+        difficulty: position.difficulty || 'medium',
+        method: position.generation_method || 'generated',
+        eval_change: position.eval_gap_cp || 0,
+        motifs: position.motifs || []
+    }))
+}
+
 type PracticeModalProps = {
     originalFen: string
     playedMove: string
@@ -61,11 +107,25 @@ export default function PracticeModal({
                 })
 
                 if (!res.ok) {
-                    throw new Error('Failed to generate practice positions')
+                    let message = 'Failed to generate practice positions'
+
+                    try {
+                        const payload = await res.json()
+                        message = payload.error || message
+                    } catch {
+                        // Ignore JSON parsing failures and use the default message.
+                    }
+
+                    throw new Error(message)
                 }
 
-                const data = await res.json()
-                setPositions(data.positions || [])
+                const data: PracticeApiResponse = await res.json()
+                const normalizedPositions = normalizePracticePositions(data)
+
+                setPositions(normalizedPositions)
+                setCurrentIndex(0)
+                setShowAnswer(false)
+                setShowOriginal(normalizedPositions.length === 0)
             } catch (e: any) {
                 setError(e.message || 'Something went wrong')
             } finally {

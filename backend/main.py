@@ -8,6 +8,7 @@ This service handles:
 """
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 import os
 import json
 import logging
@@ -33,6 +34,18 @@ if not DATABASE_URL:
     raise RuntimeError('DATABASE_URL not set in backend/.env')
 
 engine = create_engine(DATABASE_URL, future=True)
+
+
+class GenerateSimilarRequest(BaseModel):
+    fen: str
+    played_uci: str
+    best_uci: str
+    count: int = Field(default=20, ge=1, le=100)
+    difficulty: str | None = Field(default=None)
+    use_stockfish: bool = Field(default=True)
+    side_to_move: str | None = Field(default="same_as_source")
+    seed: int | None = Field(default=None)
+    timeout_seconds: float = Field(default=12.0, gt=0, le=30)
 
 
 @asynccontextmanager
@@ -360,3 +373,51 @@ async def get_user_games(user_id: str, limit: int = 50):
             })
         
         return {'games': games, 'total': len(games)}
+
+
+@app.post('/practice/generate-similar')
+async def generate_similar_practice_positions(payload: GenerateSimilarRequest):
+    """Generate new similar tactical practice positions from a source blunder/mistake FEN."""
+    try:
+        from .position_generator import generate_similar_positions_mvp
+        import chess
+
+        board = chess.Board(payload.fen)
+
+        played_move = chess.Move.from_uci(payload.played_uci)
+        best_move = chess.Move.from_uci(payload.best_uci)
+
+        if played_move not in board.legal_moves:
+            raise HTTPException(status_code=400, detail='played_uci is not legal in the provided fen')
+        if best_move not in board.legal_moves:
+            raise HTTPException(status_code=400, detail='best_uci is not legal in the provided fen')
+
+        difficulty = payload.difficulty.lower().strip() if payload.difficulty else None
+        if difficulty and difficulty not in {'easy', 'medium', 'hard'}:
+            raise HTTPException(status_code=400, detail='difficulty must be one of: easy, medium, hard')
+
+        requested_turn = payload.side_to_move.lower().strip() if payload.side_to_move else 'same_as_source'
+        if requested_turn not in {'white', 'black', 'same_as_source'}:
+            raise HTTPException(status_code=400, detail='side_to_move must be one of: white, black, same_as_source')
+
+        result = generate_similar_positions_mvp(
+            fen=payload.fen,
+            played_uci=payload.played_uci,
+            best_uci=payload.best_uci,
+            count=payload.count,
+            difficulty=difficulty,
+            use_stockfish=payload.use_stockfish,
+            side_to_move=requested_turn,
+            seed=payload.seed,
+            timeout_seconds=payload.timeout_seconds
+        )
+
+        return result
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Practice generation failed: {e}")
+        raise HTTPException(status_code=500, detail='Failed to generate similar practice positions')

@@ -6,16 +6,28 @@ export async function POST(request: Request) {
     try {
         const body = await request.json()
 
-        const res = await fetch(`${BACKEND_URL}/generate-positions`, {
+        const res = await fetch(`${BACKEND_URL}/practice/generate-similar`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         })
 
         if (!res.ok) {
-            const error = await res.text()
+            const contentType = res.headers.get('content-type') || ''
+            let error = `Request failed with status ${res.status}`
+
+            if (contentType.includes('application/json')) {
+                const payload = await res.json()
+                error = payload.detail || payload.error || error
+            } else {
+                const text = await res.text()
+                if (text) {
+                    error = text
+                }
+            }
+
             return NextResponse.json(
-                { error: `Backend error: ${error}` },
+                { error },
                 { status: res.status }
             )
         }
